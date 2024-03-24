@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 # -----------------------------------------
-# Phantom sample App Connector python file
+# App Connector python file
 # -----------------------------------------
 
 # Python 3 Compatibility imports
@@ -15,7 +15,7 @@ from phantom.vault import Vault
 from phantom.base_connector import BaseConnector
 from phantom.action_result import ActionResult
 
-# Usage of the consts file is recommended
+# Usage of the consts file is recommended.
 # from configsimportexporttoolskiy_consts import *
 from utils import convert_workbook_into_importable_JSON
 import requests
@@ -51,7 +51,7 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
 
         return RetVal(
             action_result.set_status(
-                phantom.APP_ERROR, "Empty response and no information in the header"
+                phantom.APP_ERROR, "Empty response and no information in the header."
             ), None
         )
 
@@ -66,7 +66,7 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
             split_lines = [x.strip() for x in split_lines if x.strip()]
             error_text = '\n'.join(split_lines)
         except:
-            error_text = "Cannot parse error details"
+            error_text = "Cannot parse error details."
 
         message = "Status Code: {0}. Data from server:\n{1}\n".format(status_code, error_text)
 
@@ -380,7 +380,6 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         
         if phantom.is_fail(ret_val):
             # the call to the 3rd party device or service failed, action result should contain all the error details
-            # for now the return is commented out, but after implementation, return from here
             self.save_progress("Test Connectivity Failed.")
             return action_result.get_status()
 
