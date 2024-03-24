@@ -1,0 +1,17 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "soarapp",
+			"problemMatcher": [
+				"$soarappproblem"
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"label": "soarapp: soarapp",
+			"appMetadata": "configsimportexporttoolskiy.json"
+		}
+	]
+}
