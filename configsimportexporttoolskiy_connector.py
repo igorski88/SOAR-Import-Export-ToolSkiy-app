@@ -129,7 +129,7 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
 
         return RetVal(action_result.set_status(phantom.APP_ERROR, message), None)
 
-    def _make_rest_call(self, endpoint, action_result, method="get", **kwargs):
+    def _make_rest_call(self, endpoint, action_result, method, **kwargs):
         # **kwargs can be any additional parameters that requests.request accepts
 
         config = self.get_config()
@@ -175,11 +175,23 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         
         action_result.add_data({"RAW_JSONdata": RAW_JSONdata})
         
-        for raw_worbook in RAW_JSONdata["data"]:
-            formated_response = convert_workbook_into_importable_JSON(raw_worbook)
-            action_result.add_data({"Formated_Workbooks": {raw_worbook["name"]:formated_response}})
-
+        formated_response = convert_workbook_into_importable_JSON(RAW_JSONdata)
         
+        action_result.add_data({"RAW_JSONdata": RAW_JSONdata})
+        
+        
+        #for raw_worbook in RAW_JSONdata["data"]:
+            #formated_response = convert_workbook_into_importable_JSON(RAW_JSONdata)
+            #action_result.add_data({"Formated_Workbooks": {raw_worbook["name"]: formated_response}})
+
+        #Create the url needed to upload the workbook data
+        Cmd = "/rest/workbook_template" # page zero indicates all pages Refrence: https://docs.splunk.com/Documentation/SOARonprem/6.1.1/PlatformAPI/RESTQueryData
+
+        self.save_progress("Making Rest Call")
+        # make rest call
+        ret_val, response = self._make_rest_call(
+            Cmd, action_result, params=None, method="post", **formated_response
+        )
 
         
         
@@ -199,7 +211,7 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         self.save_progress("Making Rest Call")
         # make rest call
         ret_val, response = self._make_rest_call(
-            Cmd, action_result, params=None, headers=None
+            Cmd, action_result, params=None, method="get"
         )
         
         # get the Workbooks config
@@ -271,7 +283,7 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         
         # make rest call
         ret_val, response = self._make_rest_call(
-            Cmd, action_result, params=None, headers=None
+            Cmd, action_result, params=None, method="get"
         )
             
         
@@ -376,7 +388,7 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         self.save_progress("Connecting to endpoint")
         # make rest call
         ret_val, response = self._make_rest_call(
-            '/rest/system_info', action_result, params=None, headers=None
+            '/rest/system_info', action_result, params=None, method="get"
         )
         data_item = {
                     "Response": response,
