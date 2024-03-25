@@ -16,7 +16,7 @@ from phantom.base_connector import BaseConnector
 from phantom.action_result import ActionResult
 
 # Usage of the consts file is recommended.
-from configsimportexporttoolskiy_consts import *
+#from configsimportexporttoolskiy_consts import *
 from utils import convert_workbook_into_importable_JSON
 import requests
 import json
@@ -175,26 +175,33 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         
         action_result.add_data({"RAW_JSONdata": RAW_JSONdata})
         
-        formated_response = convert_workbook_into_importable_JSON(RAW_JSONdata)
         
-        action_result.add_data({"RAW_JSONdata": RAW_JSONdata})
-        
-        
-        #for raw_worbook in RAW_JSONdata["data"]:
-            #formated_response = convert_workbook_into_importable_JSON(RAW_JSONdata)
-            #action_result.add_data({"Formated_Workbooks": {raw_worbook["name"]: formated_response}})
+        for raw_worbook in RAW_JSONdata["data"]:
+            formated_response = convert_workbook_into_importable_JSON(raw_worbook)
+            action_result.add_data({"Formated_Workbooks": {raw_worbook["name"]: formated_response}})
+            
+            formated_response_dict = {
+                "json": formated_response
+                }
+            
+            #Create the url needed to upload the workbook data
+            Cmd = "/rest/workbook_template" # page zero indicates all pages Refrence: https://docs.splunk.com/Documentation/SOARonprem/6.1.1/PlatformAPI/RESTQueryData
 
-        #Create the url needed to upload the workbook data
-        Cmd = "/rest/workbook_template" # page zero indicates all pages Refrence: https://docs.splunk.com/Documentation/SOARonprem/6.1.1/PlatformAPI/RESTQueryData
-
-        self.save_progress("Making Rest Call")
-        # make rest call
-        ret_val, response = self._make_rest_call(
-            Cmd, action_result, params=None, method="post", **formated_response
-        )
+            self.save_progress("Making Rest Call")
+            # make rest call
+            ret_val, response = self._make_rest_call(
+                Cmd, action_result, params=None, method="post", **formated_response_dict
+            )
+            
+            if phantom.is_fail(ret_val):
+                self.save_progress("Failed make Rest Call to get all the Workbook IDs.")
+                action_result.update_summary({"response": response, "ret_val": ret_val})
+                return action_result.get_status()
+                #return action_result.set_status(phantom.APP_ERROR, "Failed make Rest Call to get all the Workbook IDs.")
+                
 
         
-        
+
         success_response_msg = "Import Success"
         return action_result.set_status(phantom.APP_SUCCESS, success_response_msg)
 
