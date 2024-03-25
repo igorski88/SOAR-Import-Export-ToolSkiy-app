@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 # -----------------------------------------
-# App Connector python file
+# App Connector python file.
 # -----------------------------------------
 
 # Python 3 Compatibility imports
@@ -16,7 +16,7 @@ from phantom.base_connector import BaseConnector
 from phantom.action_result import ActionResult
 
 # Usage of the consts file is recommended.
-# from configsimportexporttoolskiy_consts import *
+from configsimportexporttoolskiy_consts import *
 from utils import convert_workbook_into_importable_JSON
 import requests
 import json
@@ -129,7 +129,7 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
 
         return RetVal(action_result.set_status(phantom.APP_ERROR, message), None)
 
-    def _make_rest_call(self, endpoint, action_result, method="get", **kwargs):
+    def _make_rest_call(self, endpoint, action_result, method, **kwargs):
         # **kwargs can be any additional parameters that requests.request accepts
 
         config = self.get_config()
@@ -170,10 +170,30 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         
         success_response_msg = ""
         
-        #Get the files from the vault
+        #Get the files from the vault.
         RAW_JSONdata = self.get_json_from_file(action_result)
-
+        
         action_result.add_data({"RAW_JSONdata": RAW_JSONdata})
+        
+        formated_response = convert_workbook_into_importable_JSON(RAW_JSONdata)
+        
+        action_result.add_data({"RAW_JSONdata": RAW_JSONdata})
+        
+        
+        #for raw_worbook in RAW_JSONdata["data"]:
+            #formated_response = convert_workbook_into_importable_JSON(RAW_JSONdata)
+            #action_result.add_data({"Formated_Workbooks": {raw_worbook["name"]: formated_response}})
+
+        #Create the url needed to upload the workbook data
+        Cmd = "/rest/workbook_template" # page zero indicates all pages Refrence: https://docs.splunk.com/Documentation/SOARonprem/6.1.1/PlatformAPI/RESTQueryData
+
+        self.save_progress("Making Rest Call")
+        # make rest call
+        ret_val, response = self._make_rest_call(
+            Cmd, action_result, params=None, method="post", **formated_response
+        )
+
+        
         
         success_response_msg = "Import Success"
         return action_result.set_status(phantom.APP_SUCCESS, success_response_msg)
@@ -191,7 +211,7 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         self.save_progress("Making Rest Call")
         # make rest call
         ret_val, response = self._make_rest_call(
-            Cmd, action_result, params=None, headers=None
+            Cmd, action_result, params=None, method="get"
         )
         
         # get the Workbooks config
@@ -263,7 +283,7 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         
         # make rest call
         ret_val, response = self._make_rest_call(
-            Cmd, action_result, params=None, headers=None
+            Cmd, action_result, params=None, method="get"
         )
             
         
@@ -368,7 +388,7 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         self.save_progress("Connecting to endpoint")
         # make rest call
         ret_val, response = self._make_rest_call(
-            '/rest/system_info', action_result, params=None, headers=None
+            '/rest/system_info', action_result, params=None, method="get"
         )
         data_item = {
                     "Response": response,
