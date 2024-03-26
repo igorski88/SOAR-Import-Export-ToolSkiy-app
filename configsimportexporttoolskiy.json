@@ -41,7 +41,22 @@
                 "Items to Export": {
                    "description": "The items you would like to export",
                    "data_type": "string",
-                   "value_list": ["ALL", "Workbooks", "Users, Roles, & Permissions", "Case Severity Codes"],                   
+                   "value_list": [
+                        "ALL", 
+                        "Workbooks", 
+                        "Users", 
+                        "Roles",
+                        "Case Severity Codes",
+                        "CEFs",
+                        "Case Statuses",
+                        "Labels",
+                        "Tags",
+                        "HUDs",
+                        "Playbooks",
+                        "Custom Functions",
+                        "System Settings",
+                        "Container Options"
+                    ],                   
                    "required": true,
                    "allow_list": false
                 }

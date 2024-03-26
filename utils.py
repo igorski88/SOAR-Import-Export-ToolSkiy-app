@@ -95,3 +95,89 @@ def convert_workbook_into_importable_JSON(input_json):
     #print("File successfully converted to readable input file!")
     #print(output_json)
     return output_json
+
+def RequestAllSpecificData(Cmd, DataType, KeyWordForName):
+    # Construct the url for what we are looking for
+    api_url = f"https://{username}:{password}@{host}/rest/{Cmd}"
+
+    # Making the GET request
+    get_response = (get_data(api_url)).json()
+
+    #print(f"Raw Data - for {DataType}: {get_response}") 
+
+    if get_response:
+        isResponseHaveValues = is_valid_json_With_Values(get_response)
+        ResultCount = get_response.get("count", "") #Get the Key named 'count' or return "" if one doesnt exist. This ensures nothing breaks
+        if isResponseHaveValues and ResultCount == 0:
+            print(f"No {DataType} data found to import.") 
+            print(f"Return string: {get_response}")
+            input("Continue.....")
+        elif isResponseHaveValues and ResultCount == "": #In the case that thier is no count in the JSON string so we save it all as one file
+            print(f" ~~~~{DataType}s found~~~~ ")
+            FileName = f"{DataType}_export - All in one"
+            if get_response.get(KeyWordForName, ""): #Only get the data you need if it is available.
+                get_response = {KeyWordForName: get_response[KeyWordForName]} #This helps us retain the key with the values instead of just the values
+            create_file(get_response, FileName, ".json") #Last perameter is file type               
+            input("Continue.....")   
+        elif isResponseHaveValues and ResultCount != 0:
+
+            dataItems = [item for item in get_response['data']]
+            print(f" ~~~~{DataType}s found~~~~ ")
+
+            for Eachitem in dataItems:
+                print(f"{DataType}: {Eachitem[KeyWordForName]}")
+                JsonToStore = Eachitem
+                FileName = f"{DataType}_export - {Eachitem[KeyWordForName]}"
+                create_file(JsonToStore, FileName, ".json") #Last perameter is file type               
+
+                print("-----------------------------------------------")
+
+            input("Continue.....")     
+        else:
+            print(f"Something went wrong getting all the available data for - {DataType}.") 
+            print(f"Looks like Valid a VALID JSON string was not returned") 
+            print(f"Error String: {get_response}")   
+            input("Continue.....")       
+
+def Export_Playbooks_and_CustomFunctions(Cmd, DataType):
+    # Construct the url 
+    api_url = f"https://{username}:{password}@{host}/rest/{Cmd}"
+
+    # Making the GET request to get all IDs first
+    get_response = (get_data(api_url)).json()
+
+    #print(f"Raw Data - for {DataType}: {get_response}") 
+
+    if get_response:
+        ResultCount = get_response.get("count", "") #Get the Key named 'count' or return "" if one doesnt exist. This ensures nothing breaks
+        if ResultCount == 0:
+            print(f"Something went wrong getting all the available data for - {DataType}.") 
+            print(f"Error String: {get_response}")
+            input("Continue.....")
+        else:
+            dataItems = [item for item in get_response['data']]
+            print(f" ~~~~{DataType}s found~~~~ ")
+
+            for Eachitem_Json in dataItems:
+                id = Eachitem_Json['id']
+                print(f"{DataType}: {Eachitem_Json['name']} - ID:{id}")
+                #print(f"Raw: {Eachitem_Json}")                
+                FileNameTGZ = f"{DataType}_export - {Eachitem_Json['name']}"
+                FileNameRawText = f"{DataType}_export - {Eachitem_Json['name']}"
+                Cmd = f"{DataType}/{id}/export"
+                #Cmd = f"custom_function/1/export"
+                # Construct the url 
+                api_url = f"https://{username}:{password}@{host}/rest/{Cmd}"
+
+                # Making the GET request to get all IDs first
+                get_response = get_data(api_url)
+                #print(f"Raw TGZ: {get_response.content}")
+                create_file(get_response, FileNameTGZ, ".tgz") #Last perameter is file type    
+                #create_file(get_response, FileNameRawText, ".txt") #Last perameter is file type               
+
+                print("-----------------------------------------------")
+
+            input("Continue.....")   
+            
+def is_valid_json_With_Values(data):
+    return isinstance(data, dict) and len(data) >= 1
