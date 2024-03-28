@@ -82,7 +82,7 @@
                 },
                 "Default Password (only used if importing user data)": {
                     "description": "User Passwords are not stored and will need a new password when importing users. Select a default password that can be changed at a later time. If a password is not selected, 'SOAR' will be used as the default",
-                    "data_type": "password",
+                    "data_type": "string",
                     "default": "SOAR",                 
                     "required": true,
                     "allow_list": false
