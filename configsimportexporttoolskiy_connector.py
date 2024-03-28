@@ -175,34 +175,145 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         
         success_response_msg = ""
         
-        #Get the files from the vault.
-        RAW_JSONdata = self.get_json_from_file(action_result)
+        AllFiles_in_Vault = self.get_all_files_in_vault(action_result)
         
-        action_result.add_data({"RAW_JSONdata": RAW_JSONdata})
-        
-        
-        for raw_worbook in RAW_JSONdata["data"]:
-            formated_response = convert_workbook_into_importable_JSON(raw_worbook)
-            action_result.add_data({"Formated_Workbooks": {raw_worbook["name"]: formated_response}})
-            
-            formated_response_dict = {
-                "json": formated_response
-                }
-            
-            #Create the url needed to upload the workbook data
-            endpoint_path = "/rest/workbook_template" # page zero indicates all pages Refrence: https://docs.splunk.com/Documentation/SOARonprem/6.1.1/PlatformAPI/RESTQueryData
+        if not AllFiles_in_Vault:
+            return action_result.set_status(phantom.APP_ERROR, "No files in the file section of this container. Please upload files and try again.")
 
-            self.save_progress("Making Rest Call")
-            # make rest call
-            ret_val, response = self._make_rest_call(
-                endpoint_path, action_result, params=None, method="post", **formated_response_dict
-            )
             
-            if phantom.is_fail(ret_val):
-                self.save_progress("Failed make Rest Call to get all the Workbook IDs.")
-                action_result.update_summary({"response": response, "ret_val": ret_val})
-                return action_result.get_status()
-                #return action_result.set_status(phantom.APP_ERROR, "Failed make Rest Call to get all the Workbook IDs.")
+        if AllFiles_in_Vault:                    
+            for _file in AllFiles_in_Vault:
+                print(f"You selected '{_file}' to be imported.")
+                action_result.update_summary({_file["name"]: _file})
+
+                #Get the files from the vault.
+                RAW_JSONdata = self.get_json_from_file(action_result, _file["path"])
+                action_result.add_data({"RAW_JSONdata": RAW_JSONdata})
+                SearchKeyword = RAW_JSONdata["item_type"]
+    
+                if SearchKeyword == "workbook":
+                    output_json = convert_exported_workbook_into_importable_workbook_JSON(RAW_JSONdata)
+                    endpoint_path = "/rest/workbook_template"
+                    response = post_data(action_result, endpoint_path, output_json)
+                
+                elif SearchKeyword == "Users":
+                    RAW_JSONdata["password"] = SelectedPassword #Passwords must have at least  8 total characters
+                    endpoint_path = "/rest/ph_user"
+                    response = post_data(action_result, endpoint_path, RAW_JSONdata)
+                
+                elif SearchKeyword == "Roles":
+                    endpoint_path = "/rest/role"
+                    response = post_data(action_result, endpoint_path, RAW_JSONdata)
+                
+                elif SearchKeyword == "Case Severity Codes":
+                    del RAW_JSONdata['disabled'] #required to delete b/c this cannot be set via API
+                    endpoint_path = "/rest/severity"
+                    response = post_data(action_result, endpoint_path, RAW_JSONdata)
+                
+                elif SearchKeyword == "CEFs":
+                    endpoint_path = "/rest/cef"  
+                    response = post_data(action_result, endpoint_path, RAW_JSONdata)   
+                
+                elif SearchKeyword == "container_statuses":
+                    del RAW_JSONdata['disabled'] #required to delete b/c this cannot be set via API
+                    endpoint_path = "/rest/container_status"
+                    response = post_data(action_result, endpoint_path, RAW_JSONdata)
+                
+                elif SearchKeyword == "Labels":                                                   
+                    endpoint_path = "/rest/system_settings/events"
+                    for _label in RAW_JSONdata['label']:
+                        #output_json = {"add_label": "true", "label_name": _label}  
+                        output_json = {"add_tag": "true", "tag_name": _label}                               
+                        response = post_data(action_result, endpoint_path, output_json) 
+                        if response:      
+                            print(response)                        
+                            if response.get('success'): #if 'Success' is found it returnes the Keys value
+                                    print(f"You Successfully imported label: '{_label}'.")
+                            else:
+                                print(f"NOT Successfull importing label: '{_label}'. Error: {response['message']}") 
+                        response = None #Reset
+                
+                elif SearchKeyword == "Tags": #we will have to create a container --> add the tags --> delete the container 
+                    endpoint_path = "/rest/container"
+                    output_json = {"name": "Temp Case Used to Create Tags", "label": "events", "tags": RAW_JSONdata['tags']}                               
+                    response = post_data(api_url, output_json)
+                    List = []
+                    List.append(response['id'])
+                    Delete_json = {"ids": List}                        
+                    response = Delete_data(action_result, endpoint_path, Delete_json)   
+                    response = response[0] ## It returned a list so convert it back to a string                
+                
+                elif SearchKeyword == "HUDs": ## Hud 
+                    endpoint_path = "/rest/container_pin_settings"    
+                    response = post_data(endpoint_path, RAW_JSONdata)  
+                
+                elif SearchKeyword == "system_settings": 
+                    endpoint_path = "/rest/system_settings"    
+                    response = post_data(action_result, endpoint_path, RAW_JSONdata)
+                
+                elif SearchKeyword == "playbook":                          
+                    with open(f'{_file}', 'rb') as raw_b_file:                             
+                        RAW_data = raw_b_file.read()
+                        encoded_text = base64.b64encode(RAW_data).decode('utf-8')
+                        output_json = {"playbook": encoded_text, "scm": "local", "force": True} ##Future Implementation to ask the user to force or not                       
+                        endpoint_path = "/rest/import_playbook"    
+                        response = post_data(action_result, endpoint_path, output_json)
+                
+                elif SearchKeyword == "custom_function":  
+                    with open(f'{_file}', 'rb') as raw_b_file:                             
+                        RAW_data = raw_b_file.read()
+                        encoded_text = base64.b64encode(RAW_data).decode('utf-8')
+                        output_json = {"custom_function": encoded_text, "scm": "local", "force": True} ##Future Implementation to ask the user to force or not                       
+                        endpoint_path = "/rest/import_custom_function"    
+                        response = post_data(action_result, endpoint_path, output_json)
+                
+                elif SearchKeyword == "container_options": 
+                    endpoint_path = "/rest/system_settings"    
+                    response = post_data(action_result, endpoint_path, RAW_JSONdata)
+                    
+                else:
+                    print(f"Something went wrong.... Error 2235  <-- This code is made up but non the less something broke.")
+                    break
+                                        
+                                    
+                if response:
+                    print(response)
+                    if response.get('success'): #if 'Success' is found it returnes the Keys value
+                        print(f"You Successfully imported '{_file}'.")
+                    else:
+                        print(f"NOT Successfull importing label: '{_file}'. Error: {response['message']}")
+            #return
+        else:
+            new_location = input("Enter a different file location or press Enter to exit: ")
+            if new_location:
+                current_directory = new_location
+                print(f"You chose to work with '{new_location}'.")
+                continue
+            #return
+        
+        if RAW_JSONdata["data"] == "workbooks":
+            for raw_worbook in RAW_JSONdata["data"]:
+                formated_response = convert_workbook_into_importable_JSON(raw_worbook)
+                action_result.add_data({"Formated_Workbooks": {raw_worbook["name"]: formated_response}})
+                
+                formated_response_dict = {
+                    "json": formated_response
+                    }
+                
+                #Create the url needed to upload the workbook data
+                endpoint_path = "/rest/workbook_template" # page zero indicates all pages Refrence: https://docs.splunk.com/Documentation/SOARonprem/6.1.1/PlatformAPI/RESTQueryData
+
+                self.save_progress("Making Rest Call")
+                # make rest call
+                ret_val, response = self._make_rest_call(
+                    endpoint_path, action_result, params=None, method="post", **formated_response_dict
+                )
+                
+                if phantom.is_fail(ret_val):
+                    self.save_progress("Failed make Rest Call to get all the Workbook IDs.")
+                    action_result.update_summary({"response": response, "ret_val": ret_val})
+                    return action_result.get_status()
+                    #return action_result.set_status(phantom.APP_ERROR, "Failed make Rest Call to get all the Workbook IDs.")
                 
 
         
@@ -210,7 +321,27 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         success_response_msg = "Import Success"
         return action_result.set_status(phantom.APP_SUCCESS, success_response_msg)
 
-    
+    def post_data(self, action_result, endpoint_path, RAW_JSONdata):
+        
+        for raw_item in RAW_JSONdata["data"]:
+            action_result.add_data({"Formated_Workbooks": {raw_item["name"]: raw_item}})
+            
+            formated_response_dict = {
+                "json": raw_item
+                }
+            
+            self.save_progress("Making Rest Call")
+            # make rest call
+            ret_val, response = self._make_rest_call(
+                endpoint_path, action_result, params=None, method="post", **formated_response_dict
+            )
+            
+            if phantom.is_fail(ret_val):
+                self.save_progress("Failed make Rest Call")
+                action_result.update_summary({"response": response, "ret_val": ret_val})
+                return action_result.get_status()
+            
+        
     def _handle_export_workbooks(self, param):
         # Add an action result object to self (BaseConnector) to represent the action for this param
         action_result = self.add_action_result(ActionResult(dict(param)))
@@ -319,7 +450,7 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
                 else: #When the function is called and only the ID is known
                     #if no name exists then go grab one
                     endpoint_path = f"workbook_template?_filter_id={WB_Template_ID}"                 
-                    #api_url = f"https://{username}:{password}@{host}/rest/{endpoint_path}" # Construct the url for what we are looking for
+                    #api_url = "/rest/{endpoint_path}" # Construct the url for what we are looking for
                     #get_workbookinfo = (get_data(api_url)).json() # Making the GET request
                     #print(f"Raw Data: {get_workbookinfo['data']}")
                     #print(f"Raw Data: {response['data']}")
@@ -413,7 +544,7 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
                 
                 for Eachitem_Json in dataItems:
                     id = Eachitem_Json['id']
-                    formated_response = self.RequestSinglePlaybook_or_CustomFunction(action_result, id, Eachitem_Json)
+                    formated_response = self.RequestSinglePlaybook_or_CustomFunction(action_result, id, DataType, Eachitem_Json)
                     
                                   
                     #FileNameTGZ = f"{DataType}_export - {Eachitem_Json['name']}"
@@ -427,9 +558,9 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
                    
                 is_file_created = self.create_file(param, dataItems, FileName, ".tgz", DataType)  
 
-    def RequestSinglePlaybook_or_CustomFunction(self, action_result, id, Eachitem_Json):
+    def RequestSinglePlaybook_or_CustomFunction(self, action_result, id, DataType, Eachitem_Json):
         
-        DataType = Eachitem_Json["name"]
+        
         endpoint_path = f"/rest/{DataType}/{id}/export"
         
         # make rest call
@@ -439,7 +570,7 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
             
         
         if phantom.is_fail(ret_val):
-            self.save_progress("Failed make Rest Call to get a Workbook IDs detailed data.")
+            self.save_progress("Failed to make Rest Call to get detailed data.")
             return action_result.get_status()
         
         if response:
@@ -449,9 +580,6 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
             else:     
                 if Eachitem_Json:                
                     _Name = Eachitem_Json['name']
-                    _isdefault = Eachitem_Json['is_default']
-                    _Description = Eachitem_Json['description']
-                    _isnoterequired = Eachitem_Json['is_note_required']
 
                     #FileName = f"workbook_template_export - {_Name}"                
                 #else: #When the function is called and only the ID is known
@@ -582,20 +710,24 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         resp = Vault.create_attachment(json_bytes, container_id, file_name, metadata=None)
         return resp.get("succeeded")
 
-    def get_json_from_file(self, action_result):
+    def get_json_from_file(self, action_result, filePath):
 
-        container_id = self.get_container_id()
-        vault_info_success, vault_info_message, vault_info_data = vault.vault_info(vault_id=None, file_name=None, container_id=container_id, trace=True)
-        action_result.add_data({"vault_info_success": vault_info_success, "vault_info_message": vault_info_message, "vault_info_data": vault_info_data})
-        action_result.add_data({"path": vault_info_data[0]["path"]})
-        
         RAW_JSONdata = ""
-        with open(f'{vault_info_data[0]["path"]}', 'r') as raw_file:
+        with open(f'{filePath}', 'r') as raw_file:
             #Parse the JSON data into a Python dictionary
             RAW_JSONdata = json.load(raw_file)
             
 
         return RAW_JSONdata
+    
+    def get_all_files_in_vault(self, action_result):
+
+        container_id = self.get_container_id()
+        vault_info_success, vault_info_message, vault_info_data = vault.vault_info(vault_id=None, file_name=None, container_id=container_id, trace=True)
+        action_result.add_data({"vault_info_success": vault_info_success, "vault_info_message": vault_info_message, "vault_info_data": vault_info_data})
+        #action_result.add_data({"path": vault_info_data[0]["path"]})
+
+        return vault_info_data
  
     
     def _handle_test_connectivity(self, param):
@@ -681,12 +813,12 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
             ret_val = self.RequestAllSpecificData(param, endpoint_path, "container_statuses", "name") #command, DataType, Keyword for name
 
         if param["Items to Export"] in ('Labels', 'ALL'):
-            print("Exporting Labels...") ##TODO Will need to be done by pulling Container_Options
+            print("Exporting Labels...") 
             endpoint_path = "/rest/container_options/label"
             ret_val = self.RequestAllSpecificData(param, endpoint_path, "Labels", "label") #command, DataType, Keyword for name
 
         if param["Items to Export"] in ('Tags', 'ALL'):
-            print("Exporting Tags...") ##TODO Will need to be done by pulling Container_Options - Importing will need a container created then deleted.
+            print("Exporting Tags...") 
             endpoint_path = "/rest/container_options/tags"
             ret_val = self.RequestAllSpecificData(param, endpoint_path, "Tags", "tags") #command, DataType, Keyword for name
     
