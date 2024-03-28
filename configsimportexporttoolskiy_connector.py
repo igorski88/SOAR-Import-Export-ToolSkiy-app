@@ -22,6 +22,7 @@ from utils import is_valid_json_With_Values
 import requests
 import json
 from bs4 import BeautifulSoup
+import gzip
 import base64
 from datetime import datetime
 
@@ -96,6 +97,32 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         )
 
         return RetVal(action_result.set_status(phantom.APP_ERROR, message), None)
+    
+    def _process_gzip_response(self, r, action_result):
+        
+        # Try to decompress and parse the gzip content
+        try:
+            #decompressed_data = dir(r)
+            decompressed_data = str(r.content)
+            
+        except Exception as e:
+            return RetVal(
+                action_result.set_status(
+                    phantom.APP_ERROR, "Unable to parse gzip response. Error: {0}".format(str(e))
+                ), None
+            )
+
+        # Please specify the status codes here
+        if 200 <= r.status_code < 399:
+            return RetVal(phantom.APP_SUCCESS, decompressed_data)
+
+        # You should process the error returned in the json
+        message = "Error from server. Status Code: {0} Data from server: {1}".format(
+            r.status_code,
+            decompressed_data.replace('{', '{{').replace('}', '}}')
+        )
+
+        return RetVal(action_result.set_status(phantom.APP_ERROR, "message"), None)
 
     def _process_response(self, r, action_result):
         # store the r_text in debug data, it will get dumped in the logs if the action fails
@@ -104,7 +131,7 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
             action_result.add_debug_data({'r_text': r.text})
             action_result.add_debug_data({'r_headers': r.headers})
             
-            action_result.add_data({"Debug_Data": {"r_status_code": str(r.status_code), "r_text": str(r.text), "r_headers": str(r.headers)}}) 
+            #action_result.add_data({"Debug_Data": {"r_status_code": r.status_code, "r_text": r.text, "r_headers": r.headers}}) 
         
 
 
@@ -121,6 +148,11 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         # the error and adds it to the action_result.
         if 'html' in r.headers.get('Content-Type', ''):
             return self._process_html_response(r, action_result)
+        
+        if 'gzip' in r.headers.get('Content-Type', ''):
+            #action_result.add_data({"Raw_gzip_content": str(r.content)})
+            #action_result.add_data({"r": str(r)})
+            return self._process_gzip_response(r, action_result)
 
         # it's not content-type that is to be parsed, handle an empty response
         if not r.text:
@@ -152,7 +184,6 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         # Create a URL to connect to
         url = self._base_url + endpoint
         
-            
         try:
             r = request_func(
                 url,
@@ -192,39 +223,39 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
                 SearchKeyword = RAW_JSONdata["item_type"]
     
                 if SearchKeyword == "workbook":
-                    output_json = convert_exported_workbook_into_importable_workbook_JSON(RAW_JSONdata)
+                    output_json = convert_workbook_into_importable_JSON(RAW_JSONdata)
                     endpoint_path = "/rest/workbook_template"
-                    response = post_data(action_result, endpoint_path, output_json)
+                    response = self.post_data(action_result, endpoint_path, output_json)
                 
                 elif SearchKeyword == "Users":
-                    RAW_JSONdata["password"] = SelectedPassword #Passwords must have at least  8 total characters
+                    #TODO ###RAW_JSONdata["password"] = SelectedPassword #Passwords must have at least  8 total characters
                     endpoint_path = "/rest/ph_user"
-                    response = post_data(action_result, endpoint_path, RAW_JSONdata)
+                    response = self.post_data(action_result, endpoint_path, RAW_JSONdata)
                 
                 elif SearchKeyword == "Roles":
                     endpoint_path = "/rest/role"
-                    response = post_data(action_result, endpoint_path, RAW_JSONdata)
+                    response = self.post_data(action_result, endpoint_path, RAW_JSONdata)
                 
                 elif SearchKeyword == "Case Severity Codes":
                     del RAW_JSONdata['disabled'] #required to delete b/c this cannot be set via API
                     endpoint_path = "/rest/severity"
-                    response = post_data(action_result, endpoint_path, RAW_JSONdata)
+                    response = self.post_data(action_result, endpoint_path, RAW_JSONdata)
                 
                 elif SearchKeyword == "CEFs":
                     endpoint_path = "/rest/cef"  
-                    response = post_data(action_result, endpoint_path, RAW_JSONdata)   
+                    response = self.post_data(action_result, endpoint_path, RAW_JSONdata)   
                 
                 elif SearchKeyword == "container_statuses":
                     del RAW_JSONdata['disabled'] #required to delete b/c this cannot be set via API
                     endpoint_path = "/rest/container_status"
-                    response = post_data(action_result, endpoint_path, RAW_JSONdata)
+                    response = self.post_data(action_result, endpoint_path, RAW_JSONdata)
                 
                 elif SearchKeyword == "Labels":                                                   
                     endpoint_path = "/rest/system_settings/events"
                     for _label in RAW_JSONdata['label']:
                         #output_json = {"add_label": "true", "label_name": _label}  
                         output_json = {"add_tag": "true", "tag_name": _label}                               
-                        response = post_data(action_result, endpoint_path, output_json) 
+                        response = self.post_data(action_result, endpoint_path, output_json) 
                         if response:      
                             print(response)                        
                             if response.get('success'): #if 'Success' is found it returnes the Keys value
@@ -236,20 +267,20 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
                 elif SearchKeyword == "Tags": #we will have to create a container --> add the tags --> delete the container 
                     endpoint_path = "/rest/container"
                     output_json = {"name": "Temp Case Used to Create Tags", "label": "events", "tags": RAW_JSONdata['tags']}                               
-                    response = post_data(api_url, output_json)
+                    response = self.post_data(action_result, endpoint_path, output_json)
                     List = []
                     List.append(response['id'])
                     Delete_json = {"ids": List}                        
-                    response = Delete_data(action_result, endpoint_path, Delete_json)   
-                    response = response[0] ## It returned a list so convert it back to a string                
+                    #response = Delete_data(action_result, endpoint_path, Delete_json)   
+                    #response = response[0] ## It returned a list so convert it back to a string                
                 
                 elif SearchKeyword == "HUDs": ## Hud 
                     endpoint_path = "/rest/container_pin_settings"    
-                    response = post_data(endpoint_path, RAW_JSONdata)  
+                    response = self.post_data(endpoint_path, RAW_JSONdata)  
                 
                 elif SearchKeyword == "system_settings": 
                     endpoint_path = "/rest/system_settings"    
-                    response = post_data(action_result, endpoint_path, RAW_JSONdata)
+                    response = self.post_data(action_result, endpoint_path, RAW_JSONdata)
                 
                 elif SearchKeyword == "playbook":                          
                     with open(f'{_file}', 'rb') as raw_b_file:                             
@@ -257,7 +288,7 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
                         encoded_text = base64.b64encode(RAW_data).decode('utf-8')
                         output_json = {"playbook": encoded_text, "scm": "local", "force": True} ##Future Implementation to ask the user to force or not                       
                         endpoint_path = "/rest/import_playbook"    
-                        response = post_data(action_result, endpoint_path, output_json)
+                        response = self.post_data(action_result, endpoint_path, output_json)
                 
                 elif SearchKeyword == "custom_function":  
                     with open(f'{_file}', 'rb') as raw_b_file:                             
@@ -265,11 +296,11 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
                         encoded_text = base64.b64encode(RAW_data).decode('utf-8')
                         output_json = {"custom_function": encoded_text, "scm": "local", "force": True} ##Future Implementation to ask the user to force or not                       
                         endpoint_path = "/rest/import_custom_function"    
-                        response = post_data(action_result, endpoint_path, output_json)
+                        response = self.post_data(action_result, endpoint_path, output_json)
                 
                 elif SearchKeyword == "container_options": 
                     endpoint_path = "/rest/system_settings"    
-                    response = post_data(action_result, endpoint_path, RAW_JSONdata)
+                    response = self.post_data(action_result, endpoint_path, RAW_JSONdata)
                     
                 else:
                     print(f"Something went wrong.... Error 2235  <-- This code is made up but non the less something broke.")
@@ -288,7 +319,7 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
             if new_location:
                 current_directory = new_location
                 print(f"You chose to work with '{new_location}'.")
-                continue
+                #continue
             #return
         
         if RAW_JSONdata["data"] == "workbooks":
@@ -539,63 +570,56 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
                 action_result.add_data({"dataItems_found": dataItems})
 
                 number_of_Items = len(dataItems)
-                
-                
-                
+
                 for Eachitem_Json in dataItems:
                     id = Eachitem_Json['id']
                     formated_response = self.RequestSinglePlaybook_or_CustomFunction(action_result, id, DataType, Eachitem_Json)
-                    
-                                  
-                    #FileNameTGZ = f"{DataType}_export - {Eachitem_Json['name']}"
 
-                    
                     all_data_combined.append(formated_response)
-                    #create_file(get_response, FileNameTGZ, ".tgz") #Last perameter is file type                  
-
-
-                FileName = f"{DataType}_export - {number_of_Items} {DataType} exported - {date_str_for_filename}" 
+                
+                FileName = f"{DataType}_export - {str(number_of_Items)} {DataType} exported - {date_str_for_filename}" 
                    
-                is_file_created = self.create_file(param, dataItems, FileName, ".tgz", DataType)  
+                is_file_created = self.create_file(param, all_data_combined, FileName, ".tgz", DataType)  
+
+                if is_file_created:
+                    action_result.update_summary({"Files_Successfully_Created": {"File_Name": FileName}})
+                    success_response_msg = "Found & exported " + str(number_of_Items) + " " + DataType + ". Check Files in this container."
+                    return action_result.set_status(phantom.APP_SUCCESS, success_response_msg)
+                else:
+                    action_result.update_summary({"Files_Failed_To_Create": {"File_Name": FileName}})
+                    return action_result.set_status(phantom.APP_ERROR, "Something went wrong creating the file")
 
     def RequestSinglePlaybook_or_CustomFunction(self, action_result, id, DataType, Eachitem_Json):
         
+        #action_result.update_summary({id: {"DataType": DataType, "data": Eachitem_Json}})
         
         endpoint_path = f"/rest/{DataType}/{id}/export"
+        
         
         # make rest call
         ret_val, response = self._make_rest_call(
             endpoint_path, action_result, params=None, method="get"
         )
-            
+       
+        
+        #action_result.update_summary({id: {"DataType": DataType, "data": Eachitem_Json, "response": response}})    
         
         if phantom.is_fail(ret_val):
             self.save_progress("Failed to make Rest Call to get detailed data.")
             return action_result.get_status()
         
-        if response:
-            if response['count'] == 0:
-                print(f"Something went wrong. Try confirming that the {DataType} ID exists") 
-
-            else:     
-                if Eachitem_Json:                
-                    _Name = Eachitem_Json['name']
-
-                    #FileName = f"workbook_template_export - {_Name}"                
-                #else: #When the function is called and only the ID is known
-                    
-                    #endpoint_path = f"workbook_template?_filter_id={id}"          
+                      
+        _Name = Eachitem_Json['name']   
                            
+        success_response_msg = f"{DataType} where exported from {DataType} ID: {id} -- Name: {_Name}"
+        
+        action_result.update_summary({f"Success_RequestSinglePlaybook_or_customFunction_{Eachitem_Json['id']}": success_response_msg})
 
-                success_response_msg = f"{response['count']} {DataType} where exported from {DataType} ID: {id} -- Name: {_Name}"
-                
-                action_result.update_summary({f"Success_RequestSinglePlaybook_or_customFunction_{Eachitem_Json['id']}": success_response_msg})
-
-                data_item = {
-                    "response_data": response                                    
-                }
-                
-                action_result.add_data(data_item) 
+        data_item = {
+            "response_data": response                                    
+        }
+        
+        action_result.add_data(data_item) 
                 
         # Return success
         self.save_progress(success_response_msg)
