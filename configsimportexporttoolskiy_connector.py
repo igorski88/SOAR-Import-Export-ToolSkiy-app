@@ -211,21 +211,30 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         if not AllFiles_in_Vault:
             return action_result.set_status(phantom.APP_ERROR, "No files in the file section of this container. Please upload files and try again.")
 
-            
+        action_result.update_summary({"files": AllFiles_in_Vault})
+        
+       
+    
         if AllFiles_in_Vault:                    
             for _file in AllFiles_in_Vault:
-                print(f"You selected '{_file}' to be imported.")
+                #print(f"You selected '{_file}' to be imported.")
                 action_result.update_summary({_file["name"]: _file})
 
                 #Get the files from the vault.
                 RAW_JSONdata = self.get_json_from_file(action_result, _file["path"])
                 action_result.add_data({"RAW_JSONdata": RAW_JSONdata})
                 SearchKeyword = RAW_JSONdata["item_type"]
-    
+                response = ""
+                
                 if SearchKeyword == "workbook":
-                    output_json = convert_workbook_into_importable_JSON(RAW_JSONdata)
-                    endpoint_path = "/rest/workbook_template"
-                    response = self.post_data(action_result, endpoint_path, output_json)
+                    for raw_worbook in RAW_JSONdata["data"]:
+                        formated_response = convert_workbook_into_importable_JSON(raw_worbook)
+                        action_result.add_data({"Formated_Workbooks": {raw_worbook["name"]: formated_response}})
+                        
+                        data_wrapped = {"data": [formated_response]}
+                        action_result.add_data({"data_wrapped": data_wrapped})
+                        endpoint_path = "/rest/workbook_template"
+                        response = self.post_data(action_result, endpoint_path, data_wrapped)
                 
                 elif SearchKeyword == "Users":
                     #TODO ###RAW_JSONdata["password"] = SelectedPassword #Passwords must have at least  8 total characters
@@ -303,59 +312,29 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
                     response = self.post_data(action_result, endpoint_path, RAW_JSONdata)
                     
                 else:
-                    print(f"Something went wrong.... Error 2235  <-- This code is made up but non the less something broke.")
-                    break
+                    return action_result.set_status(phantom.APP_ERROR, "Something went wrong reading the file. Make sure it is a file that was previously created by this app from the Export action.")
                                         
                                     
                 if response:
-                    print(response)
+                    action_result.add_data({"response_from_post_data": response})
                     if response.get('success'): #if 'Success' is found it returnes the Keys value
-                        print(f"You Successfully imported '{_file}'.")
+                        return action_result.set_status(phantom.APP_SUCCESS, "You Successfully imported your file")
+                        
                     else:
-                        print(f"NOT Successfull importing label: '{_file}'. Error: {response['message']}")
-            #return
+                        return action_result.set_status(phantom.APP_ERROR, "NOT Successfull importing")
+                     
         else:
-            new_location = input("Enter a different file location or press Enter to exit: ")
-            if new_location:
-                current_directory = new_location
-                print(f"You chose to work with '{new_location}'.")
-                #continue
-            #return
-        
-        if RAW_JSONdata["data"] == "workbooks":
-            for raw_worbook in RAW_JSONdata["data"]:
-                formated_response = convert_workbook_into_importable_JSON(raw_worbook)
-                action_result.add_data({"Formated_Workbooks": {raw_worbook["name"]: formated_response}})
-                
-                formated_response_dict = {
-                    "json": formated_response
-                    }
-                
-                #Create the url needed to upload the workbook data
-                endpoint_path = "/rest/workbook_template" # page zero indicates all pages Refrence: https://docs.splunk.com/Documentation/SOARonprem/6.1.1/PlatformAPI/RESTQueryData
-
-                self.save_progress("Making Rest Call")
-                # make rest call
-                ret_val, response = self._make_rest_call(
-                    endpoint_path, action_result, params=None, method="post", **formated_response_dict
-                )
-                
-                if phantom.is_fail(ret_val):
-                    self.save_progress("Failed make Rest Call to get all the Workbook IDs.")
-                    action_result.update_summary({"response": response, "ret_val": ret_val})
-                    return action_result.get_status()
-                    #return action_result.set_status(phantom.APP_ERROR, "Failed make Rest Call to get all the Workbook IDs.")
-                
-
+            return action_result.set_status(phantom.APP_ERROR, "No Files detected in the File vault.")
         
 
-        success_response_msg = "Import Success"
+        success_response_msg = "Success... But where????"
         return action_result.set_status(phantom.APP_SUCCESS, success_response_msg)
 
     def post_data(self, action_result, endpoint_path, RAW_JSONdata):
         
+        All_responses = []
         for raw_item in RAW_JSONdata["data"]:
-            action_result.add_data({"Formated_Workbooks": {raw_item["name"]: raw_item}})
+            action_result.add_data({"raw_Item_to_import": raw_item})
             
             formated_response_dict = {
                 "json": raw_item
@@ -372,6 +351,9 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
                 action_result.update_summary({"response": response, "ret_val": ret_val})
                 return action_result.get_status()
             
+            All_responses.append(response)
+        
+        return All_responses   
         
     def _handle_export_workbooks(self, param):
         # Add an action result object to self (BaseConnector) to represent the action for this param
@@ -750,7 +732,6 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         vault_info_success, vault_info_message, vault_info_data = vault.vault_info(vault_id=None, file_name=None, container_id=container_id, trace=True)
         action_result.add_data({"vault_info_success": vault_info_success, "vault_info_message": vault_info_message, "vault_info_data": vault_info_data})
         #action_result.add_data({"path": vault_info_data[0]["path"]})
-
         return vault_info_data
  
     
