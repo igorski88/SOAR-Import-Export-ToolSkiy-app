@@ -200,32 +200,57 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
 
         return self._process_response(r, action_result)
     
-    def _handle_import(self, param):
-        # Add an action result object to self (BaseConnector) to represent the action for this param
+    def _handle_import_flow(self, param):
+        # Initialize an ActionResult to track the outcomes of actions performed in this block of code.
         action_result = self.add_action_result(ActionResult(dict(param)))
         
+        # Placeholder for a message indicating the outcome of the operation.
         success_response_msg = ""
         
+        # Retrieve all files stored in the containers file vault and assign them to a variable.
         AllFiles_in_Vault = self.get_all_files_in_vault(action_result)
         
+        # Check if there are no files in the vault and return an error message through the action result.
         if not AllFiles_in_Vault:
-            return action_result.set_status(phantom.APP_ERROR, "No files in the file section of this container. Please upload files and try again.")
+            return action_result.set_status(phantom.APP_ERROR, "No files detected in the file section of this container. Please upload files and try again.")
 
-        action_result.update_summary({"files": AllFiles_in_Vault})
+        # Update the action result's summary to include the information on the files retrieved from the file vault.
+        #action_result.update_summary({"files": AllFiles_in_Vault})
         
        
-    
+        # Iterate through each file in the vault if there are files present.
         if AllFiles_in_Vault:                    
             for _file in AllFiles_in_Vault:
-                #print(f"You selected '{_file}' to be imported.")
-                action_result.update_summary({_file["name"]: _file})
 
-                #Get the files from the vault.
+                # Extract and process JSON data from each file.
                 RAW_JSONdata = self.get_json_from_file(action_result, _file["path"])
+                
+                #If RAW_JSONdata is empty (indicating the file did not contain readable JSON), 
+                # record a summary entry for the file indicating failure, and then skip the 
+                # current iteration of the loop to proceed with the next file.**
+                if not RAW_JSONdata:
+                    action_result.update_summary({"Files Detected in File Vault": {_file["name"]: "No Readable JSON detected"}})
+                    continue  # Skip the rest of the loop and proceed with the next file.
+                
+                # Update the action result's summary with each file's name and details.
+                action_result.update_summary({"Files Detected in File Vault": {_file["name"]: _file}})
+                
+                # Add the raw JSON data to the action result for logging and debugging.
                 action_result.add_data({"RAW_JSONdata": RAW_JSONdata})
+                
+                # Check if the key 'item_type' exists in the JSON data. If not, skip to the next file.
+                if 'item_type' not in RAW_JSONdata:
+                    continue  # Skip the rest of the loop and proceed with the next file.
+                
+                # Since 'item_type' exists, proceed with processing.
+                # Determine the type of item (e.g., workbook, user, role) from the JSON data.
+                # This data is filled when the file is created by this app alone
                 SearchKeyword = RAW_JSONdata["item_type"]
+                
+                # Initialize a placeholder for responses from POST requests.
                 response = ""
                 
+                ### Process the item based on its type by sending appropriate POST requests and handling responses.
                 if SearchKeyword == "workbook":
                     for raw_worbook in RAW_JSONdata["data"]:
                         formated_response = convert_workbook_into_importable_JSON(raw_worbook)
@@ -261,25 +286,20 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
                 
                 elif SearchKeyword == "Labels":                                                   
                     endpoint_path = "/rest/system_settings/events"
-                    for _label in RAW_JSONdata['label']:
-                        #output_json = {"add_label": "true", "label_name": _label}  
-                        output_json = {"add_tag": "true", "tag_name": _label}                               
-                        response = self.post_data(action_result, endpoint_path, output_json) 
-                        if response:      
-                            print(response)                        
-                            if response.get('success'): #if 'Success' is found it returnes the Keys value
-                                    print(f"You Successfully imported label: '{_label}'.")
-                            else:
-                                print(f"NOT Successfull importing label: '{_label}'. Error: {response['message']}") 
-                        response = None #Reset
+                    for _label in RAW_JSONdata["data"]['label']:
+                        output_json = {"add_label": "true", "label_name": _label}  
+                        #output_json = {"add_tag": "true", "tag_name": _label}
+                        data_wrapped = {"data": [output_json]}                              
+                        response = self.post_data(action_result, endpoint_path, data_wrapped) 
                 
                 elif SearchKeyword == "Tags": #we will have to create a container --> add the tags --> delete the container 
                     endpoint_path = "/rest/container"
-                    output_json = {"name": "Temp Case Used to Create Tags", "label": "events", "tags": RAW_JSONdata['tags']}                               
-                    response = self.post_data(action_result, endpoint_path, output_json)
-                    List = []
-                    List.append(response['id'])
-                    Delete_json = {"ids": List}                        
+                    output_json = {"name": "Temp Case Used to Create Tags", "label": "events", "tags": RAW_JSONdata["data"]['tags']} 
+                    data_wrapped = {"data": [output_json]}                               
+                    response = self.post_data(action_result, endpoint_path, data_wrapped)
+                    #List = []
+                    #List.append(response['id'])
+                    #Delete_json = {"ids": List}                        
                     #response = Delete_data(action_result, endpoint_path, Delete_json)   
                     #response = response[0] ## It returned a list so convert it back to a string                
                 
@@ -291,21 +311,16 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
                     endpoint_path = "/rest/system_settings"    
                     response = self.post_data(action_result, endpoint_path, RAW_JSONdata)
                 
-                elif SearchKeyword == "playbook":                          
-                    with open(f'{_file}', 'rb') as raw_b_file:                             
-                        RAW_data = raw_b_file.read()
-                        encoded_text = base64.b64encode(RAW_data).decode('utf-8')
-                        output_json = {"playbook": encoded_text, "scm": "local", "force": True} ##Future Implementation to ask the user to force or not                       
+                elif SearchKeyword == "playbook":                                      
+                        #encoded_text = base64.b64encode(RAW_data).decode('utf-8')
+                        post_json = {"playbook": RAW_JSONdata, "scm": "local", "force": True} ##Future Implementation to ask the user to force or not                       
                         endpoint_path = "/rest/import_playbook"    
-                        response = self.post_data(action_result, endpoint_path, output_json)
+                        response = self.post_data(action_result, endpoint_path, post_json)
                 
                 elif SearchKeyword == "custom_function":  
-                    with open(f'{_file}', 'rb') as raw_b_file:                             
-                        RAW_data = raw_b_file.read()
-                        encoded_text = base64.b64encode(RAW_data).decode('utf-8')
-                        output_json = {"custom_function": encoded_text, "scm": "local", "force": True} ##Future Implementation to ask the user to force or not                       
+                        post_json = {"custom_function": RAW_JSONdata, "scm": "local", "force": True} ##Future Implementation to ask the user to force or not                       
                         endpoint_path = "/rest/import_custom_function"    
-                        response = self.post_data(action_result, endpoint_path, output_json)
+                        response = self.post_data(action_result, endpoint_path, post_json)
                 
                 elif SearchKeyword == "container_options": 
                     endpoint_path = "/rest/system_settings"    
@@ -314,19 +329,26 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
                 else:
                     return action_result.set_status(phantom.APP_ERROR, "Something went wrong reading the file. Make sure it is a file that was previously created by this app from the Export action.")
                                         
-                                    
-                if response:
-                    action_result.add_data({"response_from_post_data": response})
-                    if response.get('success'): #if 'Success' is found it returnes the Keys value
-                        return action_result.set_status(phantom.APP_SUCCESS, "You Successfully imported your file")
-                        
-                    else:
-                        return action_result.set_status(phantom.APP_ERROR, "NOT Successfull importing")
+            # Check if the response indicates a successful operation.                       
+            if response:
+                # Add the response details to the action result.
+                action_result.add_data({"response_from_post_data": response})
+                
+                # Check for a success flag in the response and set the action result status accordingly.
+                #if 'success' in response: #if 'Success' is found it returnes the Keys value
+                if response[0]['success']:
+                    #action_result.update_summary({"Success_Response": response})
+                    return action_result.set_status(phantom.APP_SUCCESS, "Import was Successfull.")
+                elif "already exists" in response[0]['message']:
+                    return action_result.set_status(phantom.APP_SUCCESS, response[0]['message'])   
+                else:
+                    return action_result.set_status(phantom.APP_ERROR, "NOT Successfull importing.")
                      
         else:
+            # Return an error status if no files were found in the vault initially.
             return action_result.set_status(phantom.APP_ERROR, "No Files detected in the File vault.")
         
-
+        # Set a success message after all operations have completed without returning earlier.
         success_response_msg = "Success... But where????"
         return action_result.set_status(phantom.APP_SUCCESS, success_response_msg)
 
@@ -718,14 +740,19 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
 
     def get_json_from_file(self, action_result, filePath):
 
-        RAW_JSONdata = ""
-        with open(f'{filePath}', 'r') as raw_file:
-            #Parse the JSON data into a Python dictionary
-            RAW_JSONdata = json.load(raw_file)
-            
+        try:
+            with open(f'{filePath}', 'r') as raw_file:
+                # Attempt to parse the JSON data into a Python dictionary
+                RAW_JSONdata = json.load(raw_file)
+                return RAW_JSONdata
+        except json.JSONDecodeError:
+            # Handle the case where the file does not contain valid JSON data
+            action_result.add_message("The file does not contain valid JSON data.")
+            return None
+        
+        return None
 
-        return RAW_JSONdata
-    
+
     def get_all_files_in_vault(self, action_result):
 
         container_id = self.get_container_id()
@@ -784,7 +811,7 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
             ret_val = self.handle_export_flow(param)
             
         if action_id == 'import':
-            ret_val = self._handle_import(param)
+            ret_val = self._handle_import_flow(param)
         
 
         return ret_val
