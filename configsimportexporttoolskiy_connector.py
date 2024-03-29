@@ -22,6 +22,7 @@ from utils import is_valid_json_With_Values
 import requests
 import json
 from bs4 import BeautifulSoup
+import gzip
 import base64
 from datetime import datetime
 
@@ -96,6 +97,32 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         )
 
         return RetVal(action_result.set_status(phantom.APP_ERROR, message), None)
+    
+    def _process_gzip_response(self, r, action_result):
+        
+        # Try to decompress and parse the gzip content
+        try:
+            #decompressed_data = dir(r)
+            decompressed_data = str(r.content)
+            
+        except Exception as e:
+            return RetVal(
+                action_result.set_status(
+                    phantom.APP_ERROR, "Unable to parse gzip response. Error: {0}".format(str(e))
+                ), None
+            )
+
+        # Please specify the status codes here
+        if 200 <= r.status_code < 399:
+            return RetVal(phantom.APP_SUCCESS, decompressed_data)
+
+        # You should process the error returned in the json
+        message = "Error from server. Status Code: {0} Data from server: {1}".format(
+            r.status_code,
+            decompressed_data.replace('{', '{{').replace('}', '}}')
+        )
+
+        return RetVal(action_result.set_status(phantom.APP_ERROR, "message"), None)
 
     def _process_response(self, r, action_result):
         # store the r_text in debug data, it will get dumped in the logs if the action fails
@@ -103,12 +130,16 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
             action_result.add_debug_data({'r_status_code': r.status_code})
             action_result.add_debug_data({'r_text': r.text})
             action_result.add_debug_data({'r_headers': r.headers})
+            
+            #action_result.add_data({"Debug_Data": {"r_status_code": r.status_code, "r_text": r.text, "r_headers": r.headers}}) 
+        
 
 
         # Process each 'Content-Type' of response separately
 
         # Process a json response
         if 'json' in r.headers.get('Content-Type', ''):
+            action_result.add_data({"Raw_JSON": str(r.json())})
             return self._process_json_response(r, action_result)
 
         # Process an HTML response, Do this no matter what the api talks.
@@ -117,6 +148,11 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         # the error and adds it to the action_result.
         if 'html' in r.headers.get('Content-Type', ''):
             return self._process_html_response(r, action_result)
+        
+        if 'gzip' in r.headers.get('Content-Type', ''):
+            #action_result.add_data({"Raw_gzip_content": str(r.content)})
+            #action_result.add_data({"r": str(r)})
+            return self._process_gzip_response(r, action_result)
 
         # it's not content-type that is to be parsed, handle an empty response
         if not r.text:
@@ -148,7 +184,6 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         # Create a URL to connect to
         url = self._base_url + endpoint
         
-            
         try:
             r = request_func(
                 url,
@@ -165,29 +200,168 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
 
         return self._process_response(r, action_result)
     
-    def _handle_import(self, param):
-        # Add an action result object to self (BaseConnector) to represent the action for this param
+    def _handle_import_flow(self, param):
+        # Initialize an ActionResult to track the outcomes of actions performed in this block of code.
         action_result = self.add_action_result(ActionResult(dict(param)))
         
+        # Placeholder for a message indicating the outcome of the operation.
         success_response_msg = ""
         
-        #Get the files from the vault.
-        RAW_JSONdata = self.get_json_from_file(action_result)
+        # Retrieve all files stored in the containers file vault and assign them to a variable.
+        AllFiles_in_Vault = self.get_all_files_in_vault(action_result)
         
-        action_result.add_data({"RAW_JSONdata": RAW_JSONdata})
+        # Check if there are no files in the vault and return an error message through the action result.
+        if not AllFiles_in_Vault:
+            return action_result.set_status(phantom.APP_ERROR, "No files detected in the file section of this container. Please upload files and try again.")
+
+        # Update the action result's summary to include the information on the files retrieved from the file vault.
+        #action_result.update_summary({"files": AllFiles_in_Vault})
         
+       
+        # Iterate through each file in the vault if there are files present.
+        if AllFiles_in_Vault:                    
+            for _file in AllFiles_in_Vault:
+
+                # Extract and process JSON data from each file.
+                RAW_JSONdata = self.get_json_from_file(action_result, _file["path"])
+                
+                #If RAW_JSONdata is empty (indicating the file did not contain readable JSON), 
+                # record a summary entry for the file indicating failure, and then skip the 
+                # current iteration of the loop to proceed with the next file.**
+                if not RAW_JSONdata:
+                    action_result.update_summary({"Files Detected in File Vault": {_file["name"]: "No Readable JSON detected"}})
+                    continue  # Skip the rest of the loop and proceed with the next file.
+                
+                # Update the action result's summary with each file's name and details.
+                action_result.update_summary({"Files Detected in File Vault": {_file["name"]: _file}})
+                
+                # Add the raw JSON data to the action result for logging and debugging.
+                action_result.add_data({"RAW_JSONdata": RAW_JSONdata})
+                
+                # Check if the key 'item_type' exists in the JSON data. If not, skip to the next file.
+                if 'item_type' not in RAW_JSONdata:
+                    continue  # Skip the rest of the loop and proceed with the next file.
+                
+                # Since 'item_type' exists, proceed with processing.
+                # Determine the type of item (e.g., workbook, user, role) from the JSON data.
+                # This data is filled when the file is created by this app alone
+                SearchKeyword = RAW_JSONdata["item_type"]
+                
+                # Initialize a placeholder for responses from POST requests.
+                response = ""
+                
+                ### Process the item based on its type by sending appropriate POST requests and handling responses.
+                if SearchKeyword == "workbook":
+                    for raw_worbook in RAW_JSONdata["data"]:
+                        formated_response = convert_workbook_into_importable_JSON(raw_worbook)
+                        action_result.add_data({"Formated_Workbooks": {raw_worbook["name"]: formated_response}})
+                        
+                        data_wrapped = {"data": [formated_response]}
+                        action_result.add_data({"data_wrapped": data_wrapped})
+                        endpoint_path = "/rest/workbook_template"
+                        response = self.post_data(action_result, endpoint_path, data_wrapped)
+                
+                elif SearchKeyword == "Users":
+                    #TODO ###RAW_JSONdata["password"] = SelectedPassword #Passwords must have at least  8 total characters
+                    endpoint_path = "/rest/ph_user"
+                    response = self.post_data(action_result, endpoint_path, RAW_JSONdata)
+                
+                elif SearchKeyword == "Roles":
+                    endpoint_path = "/rest/role"
+                    response = self.post_data(action_result, endpoint_path, RAW_JSONdata)
+                
+                elif SearchKeyword == "Case Severity Codes":
+                    del RAW_JSONdata['disabled'] #required to delete b/c this cannot be set via API
+                    endpoint_path = "/rest/severity"
+                    response = self.post_data(action_result, endpoint_path, RAW_JSONdata)
+                
+                elif SearchKeyword == "CEFs":
+                    endpoint_path = "/rest/cef"  
+                    response = self.post_data(action_result, endpoint_path, RAW_JSONdata)   
+                
+                elif SearchKeyword == "container_statuses":
+                    del RAW_JSONdata['disabled'] #required to delete b/c this cannot be set via API
+                    endpoint_path = "/rest/container_status"
+                    response = self.post_data(action_result, endpoint_path, RAW_JSONdata)
+                
+                elif SearchKeyword == "Labels":                                                   
+                    endpoint_path = "/rest/system_settings/events"
+                    for _label in RAW_JSONdata["data"]['label']:
+                        output_json = {"add_label": "true", "label_name": _label}  
+                        #output_json = {"add_tag": "true", "tag_name": _label}
+                        data_wrapped = {"data": [output_json]}                              
+                        response = self.post_data(action_result, endpoint_path, data_wrapped) 
+                
+                elif SearchKeyword == "Tags": #we will have to create a container --> add the tags --> delete the container 
+                    endpoint_path = "/rest/container"
+                    output_json = {"name": "Temp Case Used to Create Tags", "label": "events", "tags": RAW_JSONdata["data"]['tags']} 
+                    data_wrapped = {"data": [output_json]}                               
+                    response = self.post_data(action_result, endpoint_path, data_wrapped)
+                    #List = []
+                    #List.append(response['id'])
+                    #Delete_json = {"ids": List}                        
+                    #response = Delete_data(action_result, endpoint_path, Delete_json)   
+                    #response = response[0] ## It returned a list so convert it back to a string                
+                
+                elif SearchKeyword == "HUDs": ## Hud 
+                    endpoint_path = "/rest/container_pin_settings"    
+                    response = self.post_data(endpoint_path, RAW_JSONdata)  
+                
+                elif SearchKeyword == "system_settings": 
+                    endpoint_path = "/rest/system_settings"    
+                    response = self.post_data(action_result, endpoint_path, RAW_JSONdata)
+                
+                elif SearchKeyword == "playbook":                                      
+                        #encoded_text = base64.b64encode(RAW_data).decode('utf-8')
+                        post_json = {"playbook": RAW_JSONdata, "scm": "local", "force": True} ##Future Implementation to ask the user to force or not                       
+                        endpoint_path = "/rest/import_playbook"    
+                        response = self.post_data(action_result, endpoint_path, post_json)
+                
+                elif SearchKeyword == "custom_function":  
+                        post_json = {"custom_function": RAW_JSONdata, "scm": "local", "force": True} ##Future Implementation to ask the user to force or not                       
+                        endpoint_path = "/rest/import_custom_function"    
+                        response = self.post_data(action_result, endpoint_path, post_json)
+                
+                elif SearchKeyword == "container_options": 
+                    endpoint_path = "/rest/system_settings"    
+                    response = self.post_data(action_result, endpoint_path, RAW_JSONdata)
+                    
+                else:
+                    return action_result.set_status(phantom.APP_ERROR, "Something went wrong reading the file. Make sure it is a file that was previously created by this app from the Export action.")
+                                        
+            # Check if the response indicates a successful operation.                       
+            if response:
+                # Add the response details to the action result.
+                action_result.add_data({"response_from_post_data": response})
+                
+                # Check for a success flag in the response and set the action result status accordingly.
+                #if 'success' in response: #if 'Success' is found it returnes the Keys value
+                if response[0]['success']:
+                    #action_result.update_summary({"Success_Response": response})
+                    return action_result.set_status(phantom.APP_SUCCESS, "Import was Successfull.")
+                elif "already exists" in response[0]['message']:
+                    return action_result.set_status(phantom.APP_SUCCESS, response[0]['message'])   
+                else:
+                    return action_result.set_status(phantom.APP_ERROR, "NOT Successfull importing.")
+                     
+        else:
+            # Return an error status if no files were found in the vault initially.
+            return action_result.set_status(phantom.APP_ERROR, "No Files detected in the File vault.")
         
-        for raw_worbook in RAW_JSONdata["data"]:
-            formated_response = convert_workbook_into_importable_JSON(raw_worbook)
-            action_result.add_data({"Formated_Workbooks": {raw_worbook["name"]: formated_response}})
+        # Set a success message after all operations have completed without returning earlier.
+        success_response_msg = "Success... But where????"
+        return action_result.set_status(phantom.APP_SUCCESS, success_response_msg)
+
+    def post_data(self, action_result, endpoint_path, RAW_JSONdata):
+        
+        All_responses = []
+        for raw_item in RAW_JSONdata["data"]:
+            action_result.add_data({"raw_Item_to_import": raw_item})
             
             formated_response_dict = {
-                "json": formated_response
+                "json": raw_item
                 }
             
-            #Create the url needed to upload the workbook data
-            endpoint_path = "/rest/workbook_template" # page zero indicates all pages Refrence: https://docs.splunk.com/Documentation/SOARonprem/6.1.1/PlatformAPI/RESTQueryData
-
             self.save_progress("Making Rest Call")
             # make rest call
             ret_val, response = self._make_rest_call(
@@ -195,18 +369,14 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
             )
             
             if phantom.is_fail(ret_val):
-                self.save_progress("Failed make Rest Call to get all the Workbook IDs.")
+                self.save_progress("Failed make Rest Call")
                 action_result.update_summary({"response": response, "ret_val": ret_val})
                 return action_result.get_status()
-                #return action_result.set_status(phantom.APP_ERROR, "Failed make Rest Call to get all the Workbook IDs.")
-                
-
+            
+            All_responses.append(response)
         
-
-        success_response_msg = "Import Success"
-        return action_result.set_status(phantom.APP_SUCCESS, success_response_msg)
-
-    
+        return All_responses   
+        
     def _handle_export_workbooks(self, param):
         # Add an action result object to self (BaseConnector) to represent the action for this param
         action_result = self.add_action_result(ActionResult(dict(param)))
@@ -305,36 +475,35 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
 
             else:           
 
-                #Create the File name
                 if WB_Data:                
-                    WB_Template_Name = WB_Data['name']
+                    _Name = WB_Data['name']
                     WB_Template_isdefault = WB_Data['is_default']
-                    WB_Template_Description = WB_Data['description']
-                    WB_Template_isnoterequired = WB_Data['is_note_required']
+                    _Description = WB_Data['description']
+                    _isnoterequired = WB_Data['is_note_required']
 
-                    #FileName = f"workbook_template_export - {WB_Template_Name}"                
+                    #FileName = f"workbook_template_export - {_Name}"                
                 else: #When the function is called and only the ID is known
                     #if no name exists then go grab one
                     endpoint_path = f"workbook_template?_filter_id={WB_Template_ID}"                 
-                    #api_url = f"https://{username}:{password}@{host}/rest/{endpoint_path}" # Construct the url for what we are looking for
+                    #api_url = "/rest/{endpoint_path}" # Construct the url for what we are looking for
                     #get_workbookinfo = (get_data(api_url)).json() # Making the GET request
                     #print(f"Raw Data: {get_workbookinfo['data']}")
                     #print(f"Raw Data: {response['data']}")
-                    #WB_Template_Name = get_workbookinfo['data'][0]['name']
+                    #_Name = get_workbookinfo['data'][0]['name']
                     #WB_Template_isdefault = get_workbookinfo['data'][0]['is_default']
-                    #WB_Template_Description = get_workbookinfo['data'][0]['description']
-                    #WB_Template_isnoterequired = get_workbookinfo['data'][0]['is_note_required']
-                    #FileName = f"workbook_template_export - {WB_Template_Name}"
+                    #_Description = get_workbookinfo['data'][0]['description']
+                    #_isnoterequired = get_workbookinfo['data'][0]['is_note_required']
+                    #FileName = f"workbook_template_export - {_Name}"
 
-                success_response_msg = f"{response['count']} Phases where exported from WorkBook ID: {WB_Template_ID} -- Name: {WB_Template_Name}"
+                success_response_msg = f"{response['count']} Phases where exported from WorkBook ID: {WB_Template_ID} -- Name: {_Name}"
                 
                 action_result.update_summary({f"Success_RequestSingleWorkbook_{WB_Data['id']}": success_response_msg})
                 
                 # Add 'name' and is_default to the begining of the json to store
-                formated_response = {'name': WB_Template_Name, 
+                formated_response = {'name': _Name, 
                     'is_default': WB_Template_isdefault, 
-                    'description': WB_Template_Description, 
-                    'is_note_required': WB_Template_isnoterequired,
+                    'description': _Description, 
+                    'is_note_required': _isnoterequired,
                     'file_location': Vault.get_vault_tmp_dir(),
                     **response}
 
@@ -348,7 +517,7 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         self.save_progress(success_response_msg)
         return formated_response
     
-    def RequestAllSpecificData(self, param, endpoint_path, DataType, KeyWordForName):
+    def Export_Playbooks_and_CustomFunctions(self, param, endpoint_path, DataType):
         # Add an action result object to self (BaseConnector) to represent the action for this param
         action_result = self.add_action_result(ActionResult(dict(param)))
         
@@ -356,18 +525,21 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
 
         self.save_progress("Making Rest Call")
         # make rest call
-        ret_val, response = self._make_rest_call(
+        ret_val, get_response = self._make_rest_call(
             endpoint_path, action_result, params=None, method="get"
         )
         
         ret_rest_value = {
                     "ret_val": ret_val,
-                    "response": response                    
+                    "get_response": get_response, 
+                    "Current Status": action_result.get_status(),
+                    "Currant Msg": action_result.get_message(),    
+                    "is_valid_json_With_Values": is_valid_json_With_Values(get_response)              
                 }
         
         # get the asset config
         data_item = {
-                    "workbooks_general_info": ret_rest_value                                    
+                    "Rest Call Retured Value": ret_rest_value                                    
                 }
         
         action_result.add_data(data_item)        
@@ -377,84 +549,174 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
             return action_result.get_status()
         
         
+        is_file_created = False
         
-        if response:
-            isResponseHaveValues = is_valid_json_With_Values(response)
-            ResultCount = get_response.get("count", "") #Get the Key named 'count' or return "" if one doesnt exist. This ensures nothing breaks
-            if isResponseHaveValues and ResultCount == 0:
-                print(f"No {DataType} data found to import.") 
-                print(f"Return string: {get_response}")
-                input("Continue.....")
-            elif isResponseHaveValues and ResultCount == "": #In the case that thier is no count in the JSON string so we save it all as one file
-                print(f" ~~~~{DataType}s found~~~~ ")
-                FileName = f"{DataType}_export - All in one"
-                if get_response.get(KeyWordForName, ""): #Only get the data you need if it is available.
-                    get_response = {KeyWordForName: get_response[KeyWordForName]} #This helps us retain the key with the values instead of just the values
-                create_file(get_response, FileName, ".json") #Last perameter is file type               
-                input("Continue.....")   
-            elif isResponseHaveValues and ResultCount != 0:
+        # Get the current date
+        current_date = datetime.now()
 
+        # Format the date in a file-name-friendly format (e.g., YYYY-MM-DD)
+        date_str_for_filename = current_date.strftime("%Y-%m-%d")
+        
+        number_of_Items = 0
+
+        all_data_combined = []
+        
+        if get_response:
+            ResultCount = get_response.get("count", "") #Get the Key named 'count' or return "" if one doesnt exist. This ensures nothing breaks
+            if ResultCount == 0:
+                action_result.update_summary({"Error": "no data found to export.", "ErrorDataType": DataType, "Error_return_string": get_response})
+                ErrorMsg = f"No {DataType} data was found"
+                return action_result.set_status(phantom.APP_ERROR, ErrorMsg)
+            else:
                 dataItems = [item for item in get_response['data']]
                 print(f" ~~~~{DataType}s found~~~~ ")
 
-                for Eachitem in dataItems:
-                    print(f"{DataType}: {Eachitem[KeyWordForName]}")
-                    JsonToStore = Eachitem
-                    FileName = f"{DataType}_export - {Eachitem[KeyWordForName]}"
-                    create_file(JsonToStore, FileName, ".json") #Last perameter is file type               
+                action_result.add_data({"dataItems_found": dataItems})
 
-                    print("-----------------------------------------------")
+                number_of_Items = len(dataItems)
 
-                input("Continue.....")     
-            else:
-                print(f"Something went wrong getting all the available data for - {DataType}.") 
-                print(f"Looks like Valid a VALID JSON string was not returned") 
-                print(f"Error String: {get_response}")   
-                input("Continue.....")  
-            
-        
-        
-        all_data_combined = []
-        if response:
-            if response['count'] == 0:
-                return action_result.set_status(phantom.APP_ERROR, "Something went wrong getting all the available workbook templates.")
+                for Eachitem_Json in dataItems:
+                    id = Eachitem_Json['id']
+                    formated_response = self.RequestSinglePlaybook_or_CustomFunction(action_result, id, DataType, Eachitem_Json)
 
-            else:
-                action_result.update_summary({"Num_of_Workbooks_Found": response['count']})   
-                Workbook_list = [item for item in response['data']]
-                id_list = [item['id'] for item in response['data']] #Get a list of all availble IDs
-                name_list = [item['name'] for item in response['data']]
-                action_result.update_summary({"Workbooks_Detected": Workbook_list})
-
-                for worbook in Workbook_list:
-                    #print(f"Imported Workbook template: {worbook['name']}")
-                                         
-                    formated_response = self.RequestSingleWorkbook(action_result, worbook['id'], worbook) 
                     all_data_combined.append(formated_response)
+                
+                FileName = f"{DataType}_export - {str(number_of_Items)} {DataType} exported - {date_str_for_filename}" 
+                   
+                is_file_created = self.create_file(param, all_data_combined, FileName, ".tgz", DataType)  
 
-                action_result.add_data({"Final_data_to_export_to_file": all_data_combined})
-                
-                # Get the current date
-                current_date = datetime.now()
-
-                # Format the date in a file-name-friendly format (e.g., YYYY-MM-DD)
-                date_str_for_filename = current_date.strftime("%Y-%m-%d")
-                
-                FileName = f"workbook_templates_export - {len(id_list)} workbooks exported - {date_str_for_filename}"
-                
-                item_type = "workbook"
-                  
-                is_file_created = self.create_file(param, all_data_combined, FileName, ".json", item_type) #Last perameter is file type
-
-                
                 if is_file_created:
                     action_result.update_summary({"Files_Successfully_Created": {"File_Name": FileName}})
-                    success_response_msg = "Found & exported " + str(len(id_list)) + " Workbooks. Check Files in this container."
+                    success_response_msg = "Found & exported " + str(number_of_Items) + " " + DataType + ". Check Files in this container."
                     return action_result.set_status(phantom.APP_SUCCESS, success_response_msg)
                 else:
                     action_result.update_summary({"Files_Failed_To_Create": {"File_Name": FileName}})
                     return action_result.set_status(phantom.APP_ERROR, "Something went wrong creating the file")
-   
+
+    def RequestSinglePlaybook_or_CustomFunction(self, action_result, id, DataType, Eachitem_Json):
+        
+        #action_result.update_summary({id: {"DataType": DataType, "data": Eachitem_Json}})
+        
+        endpoint_path = f"/rest/{DataType}/{id}/export"
+        
+        
+        # make rest call
+        ret_val, response = self._make_rest_call(
+            endpoint_path, action_result, params=None, method="get"
+        )
+       
+        
+        #action_result.update_summary({id: {"DataType": DataType, "data": Eachitem_Json, "response": response}})    
+        
+        if phantom.is_fail(ret_val):
+            self.save_progress("Failed to make Rest Call to get detailed data.")
+            return action_result.get_status()
+        
+                      
+        _Name = Eachitem_Json['name']   
+                           
+        success_response_msg = f"{DataType} where exported from {DataType} ID: {id} -- Name: {_Name}"
+        
+        action_result.update_summary({f"Success_RequestSinglePlaybook_or_customFunction_{Eachitem_Json['id']}": success_response_msg})
+
+        data_item = {
+            "response_data": response                                    
+        }
+        
+        action_result.add_data(data_item) 
+                
+        # Return success
+        self.save_progress(success_response_msg)
+        return response
+    
+    def RequestAllSpecificData(self, param, endpoint_path, DataType, KeyWordForName):
+        # Add an action result object to self (BaseConnector) to represent the action for this param
+        action_result = self.add_action_result(ActionResult(dict(param)))
+        
+        success_response_msg = ""
+
+        self.save_progress("Making Rest Call")
+        # make rest call
+        ret_val, get_response = self._make_rest_call(
+            endpoint_path, action_result, params=None, method="get"
+        )
+        
+        ret_rest_value = {
+                    "ret_val": ret_val,
+                    "get_response": get_response, 
+                    "Current Status": action_result.get_status(),
+                    "Currant Msg": action_result.get_message(),    
+                    "is_valid_json_With_Values": is_valid_json_With_Values(get_response)              
+                }
+        
+        # get the asset config
+        data_item = {
+                    "Rest Call Retured Value": ret_rest_value                                    
+                }
+        
+        action_result.add_data(data_item)        
+            
+        if phantom.is_fail(ret_val):
+            self.save_progress("Failed make Rest Call to get all the Workbook IDs.")
+            return action_result.get_status()
+        
+        
+        is_file_created = False
+        
+        # Get the current date
+        current_date = datetime.now()
+
+        # Format the date in a file-name-friendly format (e.g., YYYY-MM-DD)
+        date_str_for_filename = current_date.strftime("%Y-%m-%d")
+        
+        number_of_Items = 0
+        
+        if get_response:
+            isResponseHaveValues = is_valid_json_With_Values(get_response)
+            ResultCount = get_response.get("count", "") #Get the Key named 'count' or return "" if one doesnt exist. This ensures nothing breaks
+            if isResponseHaveValues and ResultCount == 0:
+                action_result.update_summary({"Error": "no data found to export.", "ErrorDataType": DataType, "Error_return_string": get_response})
+                ErrorMsg = f"No {DataType} data was found"
+                return action_result.set_status(phantom.APP_ERROR, ErrorMsg)
+            elif isResponseHaveValues and ResultCount == "": #In the case that there is no count in the JSON string so we save it all as one file
+                
+                if get_response.get(KeyWordForName, ""): #Only get the data you need if it is available.
+                    get_response = {KeyWordForName: get_response[KeyWordForName]} #This helps us retain the key with the values instead of just the values
+                action_result.add_data({"dataItems_found": get_response})
+                number_of_Items = len(get_response)
+                FileName = f"{DataType}_export - {number_of_Items} {DataType} exported - {date_str_for_filename}"
+                
+                is_file_created = self.create_file(param, get_response, FileName, ".json", DataType)        
+            elif isResponseHaveValues and ResultCount != 0:
+
+                dataItems = [item for item in get_response['data']]                
+                #print(f" ~~~~{DataType}s found~~~~ ")
+
+                action_result.add_data({"dataItems_found": dataItems})
+
+                number_of_Items = len(dataItems)
+                
+                FileName = f"{DataType}_export - {number_of_Items} {DataType} exported - {date_str_for_filename}" 
+                   
+                is_file_created = self.create_file(param, dataItems, FileName, ".json", DataType)
+                
+            else:
+                action_result.update_summary({"Error": "Looks like Valid a VALID JSON string was not returned", "ErrorDataType": DataType, "Error_return_string": get_response})
+                return action_result.set_status(phantom.APP_ERROR, "Something went wrong getting all the available data for - " + DataType + ".")
+                #print(f"Something went wrong getting all the available data for - {DataType}.") 
+                #print(f"Looks like Valid a VALID JSON string was not returned") 
+                #print(f"Error String: {get_response}")   
+        
+        
+        if is_file_created:
+            action_result.update_summary({"Files_Successfully_Created": {"File_Name": FileName}})
+            success_response_msg = "Found & exported " + str(number_of_Items) + " " + DataType + ". Check Files in this container."
+            return action_result.set_status(phantom.APP_SUCCESS, success_response_msg)
+        else:
+            action_result.update_summary({"Files_Failed_To_Create": {"File_Name": FileName}})
+            return action_result.set_status(phantom.APP_ERROR, "Something went wrong creating the file to export - " + DataType + ".")
+            
+
 
     def create_file(self, action_result, data, file_name, file_type, item_type):
         #wrap the data in a parent JSON used to identify the type of data when importing
@@ -476,20 +738,28 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         resp = Vault.create_attachment(json_bytes, container_id, file_name, metadata=None)
         return resp.get("succeeded")
 
-    def get_json_from_file(self, action_result):
+    def get_json_from_file(self, action_result, filePath):
+
+        try:
+            with open(f'{filePath}', 'r') as raw_file:
+                # Attempt to parse the JSON data into a Python dictionary
+                RAW_JSONdata = json.load(raw_file)
+                return RAW_JSONdata
+        except json.JSONDecodeError:
+            # Handle the case where the file does not contain valid JSON data
+            action_result.add_message("The file does not contain valid JSON data.")
+            return None
+        
+        return None
+
+
+    def get_all_files_in_vault(self, action_result):
 
         container_id = self.get_container_id()
         vault_info_success, vault_info_message, vault_info_data = vault.vault_info(vault_id=None, file_name=None, container_id=container_id, trace=True)
         action_result.add_data({"vault_info_success": vault_info_success, "vault_info_message": vault_info_message, "vault_info_data": vault_info_data})
-        action_result.add_data({"path": vault_info_data[0]["path"]})
-        
-        RAW_JSONdata = ""
-        with open(f'{vault_info_data[0]["path"]}', 'r') as raw_file:
-            #Parse the JSON data into a Python dictionary
-            RAW_JSONdata = json.load(raw_file)
-            
-
-        return RAW_JSONdata
+        #action_result.add_data({"path": vault_info_data[0]["path"]})
+        return vault_info_data
  
     
     def _handle_test_connectivity(self, param):
@@ -541,70 +811,70 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
             ret_val = self.handle_export_flow(param)
             
         if action_id == 'import':
-            ret_val = self._handle_import(param)
+            ret_val = self._handle_import_flow(param)
         
 
         return ret_val
 
     def handle_export_flow(self, param):
     
-        if param["Items to Export"] == 'Workbooks':  
+        if param["Items to Export"] in ('Workbooks', 'ALL'):  
             ret_val = self._handle_export_workbooks(param)
             
-        if param["Items to Export"] == 'Users':
+        if param["Items to Export"] in ('Users', 'ALL'):
             endpoint_path = "/rest/ph_user?page_size=0" # page zero indicates all pages Refrence: https://docs.splunk.com/Documentation/SOARonprem/6.1.1/PlatformAPI/RESTQueryData
-            ret_val = self.RequestAllSpecificData(param, endpoint_path, "user", "username")
+            ret_val = self.RequestAllSpecificData(param, endpoint_path, "Users", "username")
             
-        if param["Items to Export"] == 'Roles':
+        if param["Items to Export"] in ('Roles', 'ALL'):
             endpoint_path = "/rest/role?page_size=0" # page zero indicates all pages Refrence: https://docs.splunk.com/Documentation/SOARonprem/6.1.1/PlatformAPI/RESTQueryData
-            ret_val = self.RequestAllSpecificData(param, endpoint_path, "role", "name")
+            ret_val = self.RequestAllSpecificData(param, endpoint_path, "Roles", "name")
 
-        if param["Items to Export"] == 'Case Severity Codes':
+        if param["Items to Export"] in ('Case Severity Codes', 'ALL'):
             print("Exporting Severitys...")
             endpoint_path = "/rest/severity?page_size=0"
-            ret_val = self.RequestAllSpecificData(param, endpoint_path, "severity", "name") #command, DataType, Keyword for name
+            ret_val = self.RequestAllSpecificData(param, endpoint_path, "Case Severity Codes", "name") #command, DataType, Keyword for name
         
-        if param["Items to Export"] == 'CEFs':
+        if param["Items to Export"] in ('CEFs', 'ALL'):
             print("Exporting CEFs...") 
             endpoint_path = "/rest/cef?_filter_type=\"custom\"&page_size=0"
-            ret_val = self.RequestAllSpecificData(param, endpoint_path, "cef", "name") #command, DataType, Keyword for name
+            ret_val = self.RequestAllSpecificData(param, endpoint_path, "CEFs", "name") #command, DataType, Keyword for name
 
-        if param["Items to Export"] == 'Case Statuses':
+        if param["Items to Export"] in ('Case Statuses', 'ALL'):
             print("Exporting Case Statuses...")
             endpoint_path = "/rest/container_status?page_size=0" # page zero indicates all pages Refrence: https://docs.splunk.com/Documentation/SOARonprem/6.1.1/PlatformAPI/RESTQueryData
-            ret_val = self.RequestAllSpecificData(param, endpoint_path, "container_status", "name") #command, DataType, Keyword for name
+            ret_val = self.RequestAllSpecificData(param, endpoint_path, "container_statuses", "name") #command, DataType, Keyword for name
 
-        if param["Items to Export"] == 'Labels':
-            print("Exporting Labels...") ##TODO Will need to be done by pulling Container_Options
+        if param["Items to Export"] in ('Labels', 'ALL'):
+            print("Exporting Labels...") 
             endpoint_path = "/rest/container_options/label"
-            ret_val = self.RequestAllSpecificData(param, endpoint_path, "label", "label") #command, DataType, Keyword for name
+            ret_val = self.RequestAllSpecificData(param, endpoint_path, "Labels", "label") #command, DataType, Keyword for name
 
-        if param["Items to Export"] == 'Tags':
-            print("Exporting Tags...") ##TODO Will need to be done by pulling Container_Options - Importing will need a container created then deleted.
+        if param["Items to Export"] in ('Tags', 'ALL'):
+            print("Exporting Tags...") 
             endpoint_path = "/rest/container_options/tags"
-            ret_val = self.RequestAllSpecificData(param, endpoint_path, "tags", "tags") #command, DataType, Keyword for name
+            ret_val = self.RequestAllSpecificData(param, endpoint_path, "Tags", "tags") #command, DataType, Keyword for name
     
-        if param["Items to Export"] == 'HUDs':    
+        if param["Items to Export"] in ('HUDs', 'ALL'):    
             print("Exporting HUD...") 
             endpoint_path = "/rest/container_pin_settings?page_size=0"
-            ret_val = self.RequestAllSpecificData(param, endpoint_path, "HUD", "id") #command, DataType, Keyword for name
+            ret_val = self.RequestAllSpecificData(param, endpoint_path, "HUDs", "id") #command, DataType, Keyword for name
 
-        if param["Items to Export"] == 'Playbooks':
+        if param["Items to Export"] in ('Playbooks', 'ALL'):
             print("Exporting Playbooks...")        
             endpoint_path = "/rest/playbook?page_size=0"
-            ret_val = Export_Playbooks_and_CustomFunctions(param, endpoint_path, "playbook") #command, DataType
+            ret_val = self.Export_Playbooks_and_CustomFunctions(param, endpoint_path, "playbook") #command, DataType
 
-        if param["Items to Export"] == 'Custom Functions':
+        if param["Items to Export"] in ('Custom Functions', 'ALL'):
             print("Exporting Custom Functions...")
             endpoint_path = "/rest/custom_function?page_size=0"
-            ret_val = Export_Playbooks_and_CustomFunctions(param, endpoint_path, "custom_function")
+            ret_val = self.Export_Playbooks_and_CustomFunctions(param, endpoint_path, "custom_function")
 
-        if param["Items to Export"] == 'System Settings':
+        if param["Items to Export"] in ('System Settings', 'ALL'):
             print("Exporting all other settings ...") 
             endpoint_path = "/rest/system_settings"
             ret_val = self.RequestAllSpecificData(param, endpoint_path, "system_settings", "name") #command, DataType, Keyword for name
             
-        if param["Items to Export"] == 'Container Options':
+        if param["Items to Export"] in ('Container Options', 'ALL'):
             print("Exporting Container Options...") 
             endpoint_path = "/rest/container_options"
             ret_val = self.RequestAllSpecificData(param, endpoint_path, "container_options", "") #command, DataType, Keyword for name

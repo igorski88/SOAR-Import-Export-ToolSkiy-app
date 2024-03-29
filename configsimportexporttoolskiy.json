@@ -11,7 +11,7 @@
     "product_version_regex": ".*",
     "publisher": "Igor Dunayevskiy",
     "license": "Copyright (c) Igor Dunayevskiy, 2024",
-    "app_version": "1.0.5",
+    "app_version": "1.0.7",
     "utctime_updated": "2024-03-06T20:01:51.079819Z",
     "package_name": "phantom_configsimportexporttoolskiy",
     "main_module": "configsimportexporttoolskiy_connector.py",
@@ -79,7 +79,14 @@
                    "default": "No",                 
                    "required": true,
                    "allow_list": false
-                }
+                },
+                "Default Password (only used if importing user data)": {
+                    "description": "User Passwords are not stored and will need a new password when importing users. Select a default password that can be changed at a later time. If a password is not selected, 'SOAR' will be used as the default",
+                    "data_type": "string",
+                    "default": "SOAR",                 
+                    "required": true,
+                    "allow_list": false
+                 }
             },
             "output": [],
             "versions": "EQ(*)"
