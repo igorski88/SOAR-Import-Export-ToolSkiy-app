@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 # -----------------------------------------
-# App Connector python file.
+# App Connector python file
 # -----------------------------------------
 
 # Python 3 Compatibility imports
@@ -217,16 +217,20 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         # Update the action result's summary to include the information on the files retrieved from the file vault.
         #action_result.update_summary({"files": AllFiles_in_Vault})
         
-       
-        # Iterate through each file in the vault if there are files present.
-        if AllFiles_in_Vault:                    
-            for _file in AllFiles_in_Vault:
+        try:
+            # Iterate through each file in the vault if there are files present.
+            if AllFiles_in_Vault:                    
+                for _file in AllFiles_in_Vault:
 
-                ret_val = self.import_file(param, _file)
-                                             
-        else:
-            # Return an error status if no files were found in the vault initially.
-            return action_result.set_status(phantom.APP_ERROR, "No Files detected in the File vault.")
+                    ret_val = self.import_file(param, _file)
+                                                
+            else:
+                # Return an error status if no files were found in the vault initially.
+                return action_result.set_status(phantom.APP_ERROR, "No Files detected in the File vault.")
+        except Exception as e:
+            action_result.update_summary({"Error_String": str(e)})
+            return action_result.set_status(phantom.APP_ERROR, "Import Not Successful. See error in Summary.")
+            
         
         # Set a success message after all operations have completed without returning earlier.
         success_response_msg = "Success... But where????"
@@ -270,61 +274,67 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         
         ### Process the item based on its type by sending appropriate POST requests and handling responses.
         if SearchKeyword == "workbook":
+            formated_responseS = []
             for raw_worbook in RAW_JSONdata["data"]:
                 formated_response = convert_workbook_into_importable_JSON(raw_worbook)
                 action_result.add_data({"Formated_Workbooks": {raw_worbook["name"]: formated_response}})
                 
-                data_wrapped = {"data": [formated_response]}
                 action_result.add_data({"data_wrapped": data_wrapped})
-                endpoint_path = "/rest/workbook_template"
-                ret_val = self.post_data(action_result, endpoint_path, data_wrapped, All_responses)
-                All_responses.append(ret_val)
+                formated_responseS.append(formated_response)
+                
+                
+            data_wrapped = {"data": formated_responseS}
+            endpoint_path = "/rest/workbook_template"
+            ret_val = self.post_data(action_result, endpoint_path, data_wrapped, All_responses)
                 
                 
         
         elif SearchKeyword == "Users":
             #TODO ###RAW_JSONdata["password"] = SelectedPassword #Passwords must have at least  8 total characters
             endpoint_path = "/rest/ph_user"
-            ret_val = self.post_data(action_result, endpoint_path, RAW_JSONdata, All_responses)
-            All_responses.append(ret_val)
+            All_responses = self.post_data(action_result, endpoint_path, RAW_JSONdata, All_responses)
+            #All_responses.append(ret_val)
         
         elif SearchKeyword == "Roles":
             endpoint_path = "/rest/role"
-            ret_val = self.post_data(action_result, endpoint_path, RAW_JSONdata, All_responses)
-            All_responses.append(ret_val)
+            All_responses = self.post_data(action_result, endpoint_path, RAW_JSONdata, All_responses)
+            #All_responses.append(ret_val)
         
         elif SearchKeyword == "Case Severity Codes":
             del RAW_JSONdata['disabled'] #required to delete b/c this cannot be set via API
             endpoint_path = "/rest/severity"
-            ret_val = self.post_data(action_result, endpoint_path, RAW_JSONdata, All_responses)
-            All_responses.append(ret_val)
+            All_responses = self.post_data(action_result, endpoint_path, RAW_JSONdata, All_responses)
+            #All_responses.append(ret_val)
         
         elif SearchKeyword == "CEFs":
             endpoint_path = "/rest/cef"  
-            ret_val = self.post_data(action_result, endpoint_path, RAW_JSONdata, All_responses)
-            All_responses.append(ret_val) 
+            All_responses = self.post_data(action_result, endpoint_path, RAW_JSONdata, All_responses)
+            #All_responses.append(ret_val) 
         
         elif SearchKeyword == "container_statuses":
             del RAW_JSONdata['disabled'] #required to delete b/c this cannot be set via API
             endpoint_path = "/rest/container_status"
-            ret_val = self.post_data(action_result, endpoint_path, RAW_JSONdata, All_responses)
-            All_responses.append(ret_val)
+            All_responses = self.post_data(action_result, endpoint_path, RAW_JSONdata, All_responses)
+            #All_responses.append(ret_val)
         
-        elif SearchKeyword == "Labels":                                                   
-            endpoint_path = "/rest/system_settings/events"
+        elif SearchKeyword == "Labels":     
+            All_Labels = []                                              
             for _label in RAW_JSONdata["data"]['label']:
                 output_json = {"add_label": "true", "label_name": _label}  
                 #output_json = {"add_tag": "true", "tag_name": _label}
-                data_wrapped = {"data": [output_json]}                              
-                ret_val = self.post_data(action_result, endpoint_path, data_wrapped, All_responses)
-                All_responses.append(ret_val) 
+                All_Labels.append(output_json)
+            
+            data_wrapped = {"data": All_Labels} 
+            endpoint_path = "/rest/system_settings/events"                             
+            All_responses = self.post_data(action_result, endpoint_path, data_wrapped, All_responses)
+                
         
         elif SearchKeyword == "Tags": #we will have to create a container --> add the tags --> delete the container 
             endpoint_path = "/rest/container"
             output_json = {"name": "Temp Case Used to Create Tags", "label": "events", "tags": RAW_JSONdata["data"]['tags']} 
             data_wrapped = {"data": [output_json]}                               
-            ret_val = self.post_data(action_result, endpoint_path, data_wrapped, All_responses)
-            All_responses.append(ret_val)
+            All_responses = self.post_data(action_result, endpoint_path, data_wrapped, All_responses)
+            #All_responses.append(ret_val)
             #List = []
             #List.append(response['id'])
             #Delete_json = {"ids": List}                        
@@ -333,31 +343,31 @@ class ConfigsImportExportToolskiyConnector(BaseConnector):
         
         elif SearchKeyword == "HUDs": ## Hud 
             endpoint_path = "/rest/container_pin_settings"    
-            ret_val = self.post_data(endpoint_path, RAW_JSONdata, All_responses)
-            All_responses.append(ret_val)  
+            All_responses = self.post_data(endpoint_path, RAW_JSONdata, All_responses)
+            #All_responses.append(ret_val)  
         
         elif SearchKeyword == "system_settings": 
             endpoint_path = "/rest/system_settings"    
-            ret_val = self.post_data(action_result, endpoint_path, RAW_JSONdata, All_responses)
-            All_responses.append(ret_val)
+            All_responses = self.post_data(action_result, endpoint_path, RAW_JSONdata, All_responses)
+            #All_responses.append(ret_val)
         
         elif SearchKeyword == "playbook":                                      
                 #encoded_text = base64.b64encode(RAW_data).decode('utf-8')
                 post_json = {"playbook": RAW_JSONdata, "scm": "local", "force": True} ##Future Implementation to ask the user to force or not                       
                 endpoint_path = "/rest/import_playbook"    
-                ret_val = self.post_data(action_result, endpoint_path, post_json, All_responses)
-                All_responses.append(ret_val)
+                All_responses = self.post_data(action_result, endpoint_path, post_json, All_responses)
+                #All_responses.append(ret_val)
         
         elif SearchKeyword == "custom_function":  
                 post_json = {"custom_function": RAW_JSONdata, "scm": "local", "force": True} ##Future Implementation to ask the user to force or not                       
                 endpoint_path = "/rest/import_custom_function"    
-                ret_val = self.post_data(action_result, endpoint_path, post_json, All_responses)
-                All_responses.append(ret_val)
+                All_responses = self.post_data(action_result, endpoint_path, post_json, All_responses)
+                #All_responses.append(ret_val)
         
         elif SearchKeyword == "container_options": 
             endpoint_path = "/rest/system_settings"    
-            ret_val = self.post_data(action_result, endpoint_path, RAW_JSONdata, All_responses)
-            All_responses.append(ret_val)
+            All_responses = self.post_data(action_result, endpoint_path, RAW_JSONdata, All_responses)
+            #All_responses.append(ret_val)
             
         else:
             error_msg = f"Something went wrong reading the file named: '{FileName}'. Make sure it is a file that was previously created by this app from the Export action."
